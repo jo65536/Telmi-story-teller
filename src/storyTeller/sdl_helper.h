@@ -1,8 +1,12 @@
 #ifndef STORYTELLER_SDL_HELPER__
 #define STORYTELLER_SDL_HELPER__
 
+#include <errno.h>
+#include <fcntl.h>
 #include <math.h>
 #include <pthread.h>
+#include <stdint.h>
+#include <unistd.h>
 
 #include "SDL2/SDL.h"
 #include "SDL2/SDL_mixer.h"
@@ -38,9 +42,10 @@ static Mix_Music *music;
 static double musicDuration;
 static pthread_mutex_t durationThreadMutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_t durationThread;
-static bool durationThreadRunning = false;
+static bool durationThreadCreated = false;
 static char durationThreadPath[STR_MAX * 2];
 static char currentMusicPath[STR_MAX * 2];
+static int audioFinishedPipe[2] = {-1, -1};
 static TTF_Font *fontBold24;
 static TTF_Font *fontBold20;
 static TTF_Font *fontBold18;
@@ -260,23 +265,90 @@ void *audio_calculate_duration_thread(void *arg) {
         if (strcmp(pathToCalculate, currentMusicPath) == 0) {
             musicDuration = duration;
         }
-        durationThreadRunning = false;
-        pthread_mutex_unlock(&durationThreadMutex);
-    } else {
-        pthread_mutex_lock(&durationThreadMutex);
-        durationThreadRunning = false;
         pthread_mutex_unlock(&durationThreadMutex);
     }
     return NULL;
+}
+
+// SDL_mixer invokes this from its audio thread. A non-blocking one-byte write
+// is enough to wake the main poll loop; all story/app state remains owned by
+// the main thread.
+void SDLCALL audio_notifyFinished(void) {
+    if (audioFinishedPipe[1] < 0) {
+        return;
+    }
+
+    uint8_t notification = 1;
+    (void) write(audioFinishedPipe[1], &notification, sizeof(notification));
+}
+
+bool audio_notifications_init(void) {
+    if (pipe(audioFinishedPipe) != 0) {
+        audioFinishedPipe[0] = -1;
+        audioFinishedPipe[1] = -1;
+        return false;
+    }
+
+    for (int i = 0; i < 2; ++i) {
+        int status_flags = fcntl(audioFinishedPipe[i], F_GETFL, 0);
+        int descriptor_flags = fcntl(audioFinishedPipe[i], F_GETFD, 0);
+        if (status_flags < 0 || descriptor_flags < 0 ||
+            fcntl(audioFinishedPipe[i], F_SETFL, status_flags | O_NONBLOCK) < 0 ||
+            fcntl(audioFinishedPipe[i], F_SETFD, descriptor_flags | FD_CLOEXEC) < 0) {
+            close(audioFinishedPipe[0]);
+            close(audioFinishedPipe[1]);
+            audioFinishedPipe[0] = -1;
+            audioFinishedPipe[1] = -1;
+            return false;
+        }
+    }
+
+    Mix_HookMusicFinished(audio_notifyFinished);
+    return true;
+}
+
+int audio_notifications_fd(void) {
+    return audioFinishedPipe[0];
+}
+
+bool audio_notifications_available(void) {
+    return audioFinishedPipe[0] >= 0;
+}
+
+void audio_notifications_drain(void) {
+    uint8_t notifications[32];
+    while (audioFinishedPipe[0] >= 0 &&
+           read(audioFinishedPipe[0], notifications, sizeof(notifications)) > 0) {
+    }
+}
+
+void audio_notifications_quit(void) {
+    Mix_HookMusicFinished(NULL);
+    for (int i = 0; i < 2; ++i) {
+        if (audioFinishedPipe[i] >= 0) {
+            close(audioFinishedPipe[i]);
+            audioFinishedPipe[i] = -1;
+        }
+    }
 }
 
 bool audio_isFinished(void) {
     return music == NULL || Mix_PlayingMusic() == 0;
 }
 
+// True while a track is actually being decoded, i.e. while its end has to be
+// watched for. Paused playback does not qualify: it can only be resumed by a
+// key press, which wakes the main loop up on its own.
+bool audio_isPlaying(void) {
+    return music != NULL && Mix_PlayingMusic() == 1 && Mix_PausedMusic() == 0;
+}
+
 void audio_free_music(void) {
     if (music != NULL) {
         Mix_HaltMusic();
+        // Mix_HaltMusic also fires the finished hook. This is an intentional
+        // stop, so discard that notification before a replacement track starts.
+        audio_notifications_drain();
         Mix_FreeMusic(music);
         music = NULL;
         pthread_mutex_lock(&durationThreadMutex);
@@ -292,7 +364,10 @@ void audio_setPosition(double position) {
 }
 
 double audio_getDuration(void) {
-    return musicDuration;
+    pthread_mutex_lock(&durationThreadMutex);
+    double duration = musicDuration;
+    pthread_mutex_unlock(&durationThreadMutex);
+    return duration;
 }
 
 double audio_getPosition(void) {
@@ -303,15 +378,9 @@ double audio_getPosition(void) {
 }
 
 void audio_play_path(char *soundPath, double position) {
-    pthread_mutex_lock(&durationThreadMutex);
-    bool isThreadRunning = durationThreadRunning;
-    pthread_mutex_unlock(&durationThreadMutex);
-
-    if (isThreadRunning) {
+    if (durationThreadCreated) {
         pthread_join(durationThread, NULL);
-        pthread_mutex_lock(&durationThreadMutex);
-        durationThreadRunning = false;
-        pthread_mutex_unlock(&durationThreadMutex);
+        durationThreadCreated = false;
     }
 
     audio_free_music();
@@ -322,17 +391,15 @@ void audio_play_path(char *soundPath, double position) {
         strcpy(currentMusicPath, soundPath);
         pthread_mutex_unlock(&durationThreadMutex);
 
-        Mix_PlayMusic(music, 1);
+        // SDL_mixer counts additional loops: 0 means play exactly once.
+        Mix_PlayMusic(music, 0);
         Mix_SetMusicPosition(position);
 
         pthread_mutex_lock(&durationThreadMutex);
         strcpy(durationThreadPath, soundPath);
-        durationThreadRunning = true;
         pthread_mutex_unlock(&durationThreadMutex);
-        if (pthread_create(&durationThread, NULL, audio_calculate_duration_thread, NULL) != 0) {
-            pthread_mutex_lock(&durationThreadMutex);
-            durationThreadRunning = false;
-            pthread_mutex_unlock(&durationThreadMutex);
+        if (pthread_create(&durationThread, NULL, audio_calculate_duration_thread, NULL) == 0) {
+            durationThreadCreated = true;
         }
     } else {
         pthread_mutex_lock(&durationThreadMutex);
@@ -376,25 +443,20 @@ void video_audio_init(void) {
 
 
 void video_audio_quit(void) {
-    pthread_mutex_lock(&durationThreadMutex);
-    bool isThreadRunning = durationThreadRunning;
-    pthread_mutex_unlock(&durationThreadMutex);
+    audio_free_music();
+    audio_notifications_quit();
 
-    if (isThreadRunning) {
+    if (durationThreadCreated) {
         pthread_join(durationThread, NULL);
+        durationThreadCreated = false;
     }
 
     pthread_mutex_lock(&durationThreadMutex);
-    durationThreadRunning = false;
     currentMusicPath[0] = '\0';
     pthread_mutex_unlock(&durationThreadMutex);
 
     TTF_Quit();
 
-    if (music != NULL) {
-        Mix_FreeMusic(music);
-        music = NULL;
-    }
     Mix_CloseAudio();
 
     SDL_FreeSurface(appSurface);

@@ -8,80 +8,57 @@ int main(int argc, char *argv[])
 {
     getDeviceModel();
     FILE *fp;
-    int old_percentage = -1, current_percentage, warn_at = 15;
+    int old_percentage = -1;
+    bool was_charging = false;
 
     atexit(cleanup);
     signal(SIGINT, sigHandler);
     signal(SIGTERM, sigHandler);
-    signal(SIGSTOP, sigHandler);
-    signal(SIGCONT, sigHandler);
-
-    display_init();
-
-    int ticks = CHECK_BATTERY_TIMEOUT_S;
-    bool is_charging = false;
 
     while (!quit) {
-        if (battery_isCharging()) {
-            if (!is_charging) {
-                if (DEVICE_ID == MIYOO354) {
-                    current_percentage = getBatPercMMP();
+        int current_percentage = old_percentage;
+        bool is_charging = false;
+        bool sample_valid = true;
+
+        if (DEVICE_ID == MIYOO354) {
+            int voltage = 0, charging = 0;
+            sample_valid = getBatStatusMMP(&current_percentage, &voltage, &charging);
+            is_charging = sample_valid && charging == 3;
+        } else {
+            is_charging = battery_isCharging();
+            if (is_charging) {
+                current_percentage = 500;
+                saveFakeAxpResult(current_percentage);
+            } else {
+                if (was_charging) {
+                    // Do not smooth from the synthetic charging value.
+                    adc_value_g = updateADCValue(0);
+                } else {
+                    adc_value_g = updateADCValue(adc_value_g);
                 }
-                else {
-                    current_percentage = 500;
-                    saveFakeAxpResult(current_percentage);
-                }
-                is_charging = true;
-            }
-        }
-        else if (is_charging) {
-            is_charging = false;
-            if (DEVICE_ID == MIYOO283) {
-                adc_value_g = updateADCValue(0);
                 current_percentage = batteryPercentage(adc_value_g);
                 saveFakeAxpResult(current_percentage);
             }
-            else if (DEVICE_ID == MIYOO354) {
-                current_percentage = getBatPercMMP();
-            }
-            printf_debug(
-                "charging stopped: suspended = %d, perc = %d, warn = %d\n",
-                is_suspended, current_percentage, warn_at);
         }
 
-        if (!is_suspended) {
-            config_get("battery/warnAt", CONFIG_INT, &warn_at);
-
-            if (ticks >= CHECK_BATTERY_TIMEOUT_S) {
-                if (DEVICE_ID == MIYOO283) {
-                    adc_value_g = updateADCValue(adc_value_g);
-                    current_percentage = batteryPercentage(adc_value_g);
-                }
-                else if (DEVICE_ID == MIYOO354) {
-                    current_percentage = getBatPercMMP();
-                }
-                printf_debug(
-                    "battery check: suspended = %d, perc = %d, warn = %d\n",
-                    is_suspended, current_percentage, warn_at);
-                ticks = -1;
-            }
+        if (sample_valid) {
+            printf_debug(
+                "battery check: perc = %d, charging = %d\n",
+                current_percentage, is_charging);
 
             if (current_percentage != old_percentage) {
-                printf_debug(
-                    "saving percBat: suspended = %d, perc = %d, warn = %d\n",
-                    is_suspended, current_percentage, warn_at);
                 old_percentage = current_percentage;
                 file_put_sync(fp, "/tmp/percBat", "%d", current_percentage);
-                if (DEVICE_ID == MIYOO283) {
-                    saveFakeAxpResult(current_percentage);
-                }
             }
+            was_charging = is_charging;
         }
-        else {
-            ticks = -1;
-        }
-        ticks++;
-        sleep(1);
+
+        // GPIO/ADC sampling is cheap on the Mini. On the Mini Plus, one sample
+        // launches the vendor axp_test process, so a minute is ample for an
+        // integer battery gauge and avoids 180 extra launches per hour.
+        sleep(DEVICE_ID == MIYOO354
+                  ? CHECK_BATTERY_TIMEOUT_MMP_S
+                  : CHECK_BATTERY_TIMEOUT_MM_S);
     }
 
     return EXIT_SUCCESS;
@@ -93,16 +70,6 @@ static void sigHandler(int sig)
     case SIGINT:
     case SIGTERM:
         quit = true;
-        msleep_interrupt = 1;
-        break;
-    case SIGSTOP:
-        is_suspended = true;
-        break;
-    case SIGCONT:
-        if (DEVICE_ID == MIYOO283) {
-            adc_value_g = updateADCValue(0);
-        }
-        is_suspended = false;
         break;
     default:
         break;
@@ -112,8 +79,9 @@ static void sigHandler(int sig)
 void cleanup(void)
 {
     remove("/tmp/percBat");
-    display_free();
-    close(sar_fd);
+    if (sar_fd >= 0) {
+        close(sar_fd);
+    }
 }
 
 void saveFakeAxpResult(int current_percentage)
@@ -121,8 +89,6 @@ void saveFakeAxpResult(int current_percentage)
     FILE *fp;
     if ((fp = fopen("/tmp/.axp_result", "w+"))) {
         fprintf(fp, "{\"battery\":%d, \"voltage\":%d, \"charging\":%d}", current_percentage, adc_value_g, current_percentage == 500 ? 3 : 0);
-        fflush(fp);
-        fsync(fileno(fp));
         fclose(fp);
     }
 }
@@ -132,8 +98,11 @@ int updateADCValue(int value)
     if (battery_isCharging())
         return 100;
 
-    if (!sar_fd) {
+    if (sar_fd < 0) {
         sar_fd = open("/dev/sar", O_WRONLY);
+        if (sar_fd < 0) {
+            return value;
+        }
         ioctl(sar_fd, IOCTL_SAR_INIT, NULL);
     }
 
@@ -150,18 +119,31 @@ int updateADCValue(int value)
     return value;
 }
 
-int getBatPercMMP()
+bool getBatStatusMMP(int *percentage, int *voltage, int *charging)
 {
-    char buf[100] = "";
-    int battery_number;
+    char buf[128] = "";
+    FILE *command = popen("cd /customer/app/ && ./axp_test", "r");
+    if (command == NULL) {
+        return false;
+    }
 
-    system("cd /customer/app/ ; ./axp_test > /tmp/.axp_result");
+    bool valid = fgets(buf, sizeof(buf), command) != NULL &&
+                 sscanf(buf, "{\"battery\":%d, \"voltage\":%d, \"charging\":%d}",
+                        percentage, voltage, charging) == 3;
+    pclose(command);
 
-    FILE *fp;
-    file_get(fp, "/tmp/.axp_result", CONTENT_STR, buf);
-    sscanf(buf, "{\"battery\":%d, \"voltage\":%*d, \"charging\":%*d}", &battery_number);
+    if (valid) {
+        // Keep the same RAM cache consumed by the UI and optional telemetry,
+        // without launching axp_test a second time.
+        FILE *fp = fopen("/tmp/.axp_result", "w+");
+        if (fp != NULL) {
+            fprintf(fp, "{\"battery\":%d, \"voltage\":%d, \"charging\":%d}",
+                    *percentage, *voltage, *charging);
+            fclose(fp);
+        }
+    }
 
-    return battery_number;
+    return valid;
 }
 
 int batteryPercentage(int value)
@@ -177,35 +159,4 @@ int batteryPercentage(int value)
     if (value >= 480)
         return (int)(value * 0.51613 - 243.742);
     return 0;
-}
-
-//
-//    Draw Battery warning thread
-//
-static void *batteryWarning_thread(void *param)
-{
-    while (1) {
-        display_drawBatteryIcon(0x00FF0000, 15, 450, 10,
-                                0x00FF0000); // draw red battery icon
-        usleep(0x4000);
-    }
-    return 0;
-}
-
-void batteryWarning_show(void)
-{
-    if (adcthread_active)
-        return;
-    pthread_create(&adc_pt, NULL, batteryWarning_thread, NULL);
-    adcthread_active = true;
-}
-
-void batteryWarning_hide(void)
-{
-    if (!adcthread_active)
-        return;
-    pthread_cancel(adc_pt);
-    pthread_join(adc_pt, NULL);
-    display_drawFrame(0); // erase red frame
-    adcthread_active = false;
 }

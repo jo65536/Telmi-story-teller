@@ -62,7 +62,10 @@ void lang_removeIconLabels(bool remove_icon_labels, bool remove_hints)
         snprintf(file_path, STR_MAX * 2 - 1, LANG_DIR "/%s", ep->d_name);
 
         const char *json_data = file_read(file_path);
+        if (json_data == NULL)
+            continue;
         cJSON *root = cJSON_Parse(json_data);
+        free((void *)json_data);
 
         if (!root)
             continue;
@@ -91,7 +94,7 @@ void lang_removeIconLabels(bool remove_icon_labels, bool remove_hints)
         }
 
         json_save(root, file_path);
-        cJSON_free(root);
+        cJSON_Delete(root);
     }
     closedir(dp);
 }
@@ -156,7 +159,7 @@ bool lang_load(void)
         }
     }
 
-    cJSON_free(lang_file);
+    cJSON_Delete(lang_file);
 
     return true;
 }

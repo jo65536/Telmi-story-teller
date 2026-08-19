@@ -77,16 +77,19 @@ bool battery_isCharging(void)
         char *cmd = "cd /customer/app/ ; ./axp_test";
         int batJsonSize = 100;
         char buf[batJsonSize];
-        int charge_number;
+        int charge_number = 0;
 
         FILE *fp;
         fp = popen(cmd, "r");
-        if (fgets(buf, batJsonSize, fp) != NULL) {
-            sscanf(buf, "{\"battery\":%*d, \"voltage\":%*d, \"charging\":%d}",
-                   &charge_number);
+        if (fp == NULL) {
+            return false;
         }
+
+        bool valid = fgets(buf, batJsonSize, fp) != NULL &&
+                     sscanf(buf, "{\"battery\":%*d, \"voltage\":%*d, \"charging\":%d}",
+                            &charge_number) == 1;
         pclose(fp);
-        return charge_number == 3;
+        return valid && charge_number == 3;
     }
     return false;
 #else

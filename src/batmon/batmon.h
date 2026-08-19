@@ -2,7 +2,6 @@
 #define ADC_H__
 
 #include <fcntl.h>
-#include <pthread.h>
 #include <signal.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -18,14 +17,12 @@
 #endif
 
 #include "system/battery.h"
-#include "system/display.h"
 #include "system/system.h"
-#include "utils/config.h"
 #include "utils/file.h"
-#include "utils/flags.h"
 #include "utils/log.h"
 
-#define CHECK_BATTERY_TIMEOUT_S 15 // s - check battery percentage every 15s
+#define CHECK_BATTERY_TIMEOUT_MM_S 15
+#define CHECK_BATTERY_TIMEOUT_MMP_S 60
 
 // for reading battery
 #define SARADC_IOC_MAGIC 'a'
@@ -36,21 +33,15 @@ typedef struct {
     int adc_value;
 } SAR_ADC_CONFIG_READ;
 
-static bool adcthread_active = false;
-static pthread_t adc_pt;
-static bool quit = false;
-static int sar_fd, adc_value_g;
-static bool is_suspended = false;
+static volatile sig_atomic_t quit = 0;
+static int sar_fd = -1;
+static int adc_value_g;
 
 static void sigHandler(int sig);
 void cleanup(void);
 void saveFakeAxpResult(int current_percentage);
-bool isCharging(void);
 int updateADCValue(int);
-int getBatPercMMP(void);
+bool getBatStatusMMP(int *percentage, int *voltage, int *charging);
 int batteryPercentage(int);
-static void *batteryWarning_thread(void *param);
-void batteryWarning_show(void);
-void batteryWarning_hide(void);
 
 #endif // ADC_H__

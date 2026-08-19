@@ -3,6 +3,7 @@
 
 #include <stdbool.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "./file.h"
@@ -84,11 +85,18 @@ bool json_forceSetString(cJSON *object, const char *key, const char *value)
  * @brief Loads and parses a json file.
  *
  * @param file_path
- * @return cJSON* Root json object. Remember to cJSON_free the result.
+ * @return cJSON* Root json object. Remember to cJSON_Delete the result.
  */
 cJSON *json_load(const char *file_path)
 {
-    return cJSON_Parse(file_read(file_path));
+    const char *contents = file_read(file_path);
+    if (contents == NULL) {
+        return NULL;
+    }
+
+    cJSON *root = cJSON_Parse(contents);
+    free((void *)contents);
+    return root;
 }
 
 void json_save(cJSON *object, char *file_path)
@@ -97,6 +105,8 @@ void json_save(cJSON *object, char *file_path)
         return;
 
     char *output = cJSON_Print(object);
+    if (output == NULL)
+        return;
 
     FILE *fp = NULL;
     if ((fp = fopen(file_path, "w+")) != NULL) {
@@ -104,8 +114,7 @@ void json_save(cJSON *object, char *file_path)
         fclose(fp);
     }
 
-    if (output != NULL)
-        cJSON_free(output);
+    cJSON_free(output);
 }
 
 #endif // JSON_H__

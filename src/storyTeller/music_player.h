@@ -65,6 +65,7 @@ void musicplayer_loadSession(void) {
         json_getDouble(savedState, "musicPosition", &musicPlayerTrackPosition);
         remove(APP_SAVEFILE);
     }
+    cJSON_Delete(savedState);
 }
 
 void musicplayer_autosleep_unlock(void) {
@@ -478,6 +479,26 @@ void musicplayer_forceRefreshScreen(void) {
         display_setScreen(true);
     }
     musicplayer_setMode(musicPlayerMode);
+}
+
+// Light the panel back up on user request and redraw the current interface.
+// Always switches the panel on so the POWER toggle can never be a one way trip.
+void musicplayer_screenWakeUp(void) {
+    musicplayer_screenActivate();
+    if (musicPlayerTracksList != NULL) {
+        musicplayer_setMode(musicPlayerMode);
+    }
+}
+
+// True while the end of the current track chains to the next one, so the main
+// loop has to notice it quickly.
+bool musicplayer_isAudioChaining(void) {
+    return callback_musicplayer_autoplay != NULL && audio_isPlaying();
+}
+
+// True while musicplayer_screenUpdate() has per-second work to do.
+bool musicplayer_isScreenAnimated(void) {
+    return display_enabled && musicPlayerTracksList != NULL;
 }
 
 void musicplayer_menu(void) {

@@ -127,17 +127,14 @@ void _settings_load_keymap(void)
     json_getInt(keymap, "ingame_double_press", &settings.ingame_double_press);
     json_getString(keymap, "mainui_button_x", settings.mainui_button_x);
     json_getString(keymap, "mainui_button_y", settings.mainui_button_y);
-    cJSON_free(keymap);
+    cJSON_Delete(keymap);
 }
 
 void _settings_load_mainui(void)
 {
-    const char *json_str = NULL;
-
-    if (!(json_str = file_read(MAIN_UI_SETTINGS)))
+    cJSON *json_root = json_load(MAIN_UI_SETTINGS);
+    if (json_root == NULL)
         return;
-
-    cJSON *json_root = cJSON_Parse(json_str);
 
     json_getInt(json_root, "vol", &settings.volume);
     json_getInt(json_root, "bgmvol", &settings.bgm_volume);
@@ -159,7 +156,7 @@ void _settings_load_mainui(void)
         strcpy(settings.theme, DEFAULT_THEME_PATH);
     }
 
-    cJSON_free(json_root);
+    cJSON_Delete(json_root);
 }
 
 void settings_load(void)
@@ -334,7 +331,7 @@ bool settings_saveSystemProperty(const char *prop_name, int value)
 
     cJSON_SetNumberValue(prop, value);
     json_save(json_root, MAIN_UI_SETTINGS);
-    cJSON_free(json_root);
+    cJSON_Delete(json_root);
     temp_flag_set("settings_changed", true);
 
     return true;
