@@ -37,7 +37,10 @@ done
 [ -s "$ram/telmi-power.csv" ]
 
 kill "$logger_pid"
-wait "$logger_pid"
+if ! wait "$logger_pid"; then
+    printf 'powerlog test: logger exited non-zero on clean shutdown\n' >&2
+    exit 1
+fi
 logger_pid=
 
 set -- "$saves"/Diagnostics/power/power-miyoo-a-patched-*.csv
@@ -80,7 +83,7 @@ while [ ! -s "$bad_ram/telmi-power.csv" ] && [ "$attempt" -lt 100 ]; do
     attempt=$((attempt + 1))
 done
 [ -s "$bad_ram/telmi-power.csv" ]
-kill "$logger_pid"
+kill "$logger_pid" 2> /dev/null || true
 set +e
 wait "$logger_pid"
 flush_status=$?

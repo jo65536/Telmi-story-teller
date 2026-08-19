@@ -28,7 +28,6 @@ int main(int argc, char *argv[])
             is_charging = battery_isCharging();
             if (is_charging) {
                 current_percentage = 500;
-                saveFakeAxpResult(current_percentage);
             } else {
                 if (was_charging) {
                     // Do not smooth from the synthetic charging value.
@@ -37,7 +36,6 @@ int main(int argc, char *argv[])
                     adc_value_g = updateADCValue(adc_value_g);
                 }
                 current_percentage = batteryPercentage(adc_value_g);
-                saveFakeAxpResult(current_percentage);
             }
         }
 
@@ -49,6 +47,9 @@ int main(int argc, char *argv[])
             if (current_percentage != old_percentage) {
                 old_percentage = current_percentage;
                 file_put_sync(fp, "/tmp/percBat", "%d", current_percentage);
+                if (DEVICE_ID != MIYOO354) {
+                    saveFakeAxpResult(current_percentage);
+                }
             }
             was_charging = is_charging;
         }
