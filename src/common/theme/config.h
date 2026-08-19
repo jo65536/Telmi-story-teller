@@ -102,6 +102,10 @@ bool theme_applyConfig(Theme_s *config, const char *config_path,
 
     // Get JSON objects
     cJSON *json_root = cJSON_Parse(json_str);
+    free((void *)json_str);
+    if (json_root == NULL)
+        return false;
+
     cJSON *json_batteryPercentage =
         cJSON_GetObjectItem(json_root, "batteryPercentage");
     cJSON *json_hideLabels = cJSON_GetObjectItem(json_root, "hideLabels");
@@ -175,7 +179,7 @@ bool theme_applyConfig(Theme_s *config, const char *config_path,
     json_getInt(json_frame, "border-left", &config->frame.border_left);
     json_getInt(json_frame, "border-right", &config->frame.border_right);
 
-    cJSON_free(json_root);
+    cJSON_Delete(json_root);
 
     return true;
 }
@@ -243,7 +247,7 @@ static bool _theme_overrides_changed = false;
 void theme_freeOverrides(void)
 {
     if (_theme_overrides != NULL)
-        cJSON_free(_theme_overrides);
+        cJSON_Delete(_theme_overrides);
     _theme_overrides = NULL;
 }
 

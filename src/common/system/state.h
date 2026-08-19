@@ -27,9 +27,15 @@ bool check_isRetroArch(void)
     if (!exists(CMD_TO_RUN_PATH))
         return false;
     const char *cmd = file_read(CMD_TO_RUN_PATH);
-    if (strstr(cmd, "retroarch") != NULL ||
-        strstr(cmd, "/mnt/SDCARD/Emu/") != NULL ||
-        strstr(cmd, "/mnt/SDCARD/RApp/") != NULL) {
+    if (cmd == NULL)
+        return false;
+
+    bool is_retroarch = strstr(cmd, "retroarch") != NULL ||
+                        strstr(cmd, "/mnt/SDCARD/Emu/") != NULL ||
+                        strstr(cmd, "/mnt/SDCARD/RApp/") != NULL;
+    free((void *)cmd);
+
+    if (is_retroarch) {
         pid_t pid;
         if ((pid = process_searchpid("retroarch")) != 0 ||
             (pid = process_searchpid("ra32")) != 0) {

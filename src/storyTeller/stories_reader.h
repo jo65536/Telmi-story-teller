@@ -29,6 +29,7 @@
 #define STR_DIRNAME 128
 
 #define MAX_STORIES_NIGHT_MODE 16
+#define STORIES_TRANSIENT_SCREEN_ON_S 5
 
 static int storiesDiplayMode = STORIES_DISPLAY_MODE_SINGLE;
 static bool storiesNightModeEnabled = false;
@@ -74,6 +75,8 @@ static bool storyShowTimeline = false;
 static long int storyScreenUpdateTime = 0;
 static int storyDrawTimelineTime = 0;
 static long int storyScreenEnableEndTime = 0;
+static bool storyScreenAutoDisabled = false;
+static bool storyScreenPowerLockedOff = false;
 
 static long storyLastPlayingTime = 0;
 static int storyPlayingTime = 0;
@@ -187,6 +190,7 @@ bool stories_loadJsonSession(char *pathJson) {
         return false;
     }
 
+    bool result = false;
     int a;
     bool b;
     if (json_getInt(savedState, "app", &a) && a == APP_STORIES) {
@@ -214,14 +218,14 @@ bool stories_loadJsonSession(char *pathJson) {
             char storyPath[STR_MAX];
 
             if(!json_getString(savedState, "storyPath", storyPath)) {
-                return false;
+                goto cleanup;
             }
 
             storyIndex = stories_getStoryIndex(storyPath);
 
             if (storyIndex == -1) {
                 storyIndex = 0;
-                return false;
+                goto cleanup;
             }
 
             json_getString(savedState, "storyActionKey", storyActionKey);
@@ -241,9 +245,12 @@ bool stories_loadJsonSession(char *pathJson) {
             }
         }
         json_getDouble(savedState, "storyTime", &storyTime);
-        return true;
+        result = true;
     }
-    return false;
+
+cleanup:
+    cJSON_Delete(savedState);
+    return result;
 }
 bool stories_loadSession(char *pathJson) {
     bool result = stories_loadJsonSession(pathJson);
@@ -325,6 +332,7 @@ void stories_nightMode_resume(void) {
     video_displayBlackScreen();
     display_setScreen(false);
     storyScreenEnabled = false;
+    storyScreenAutoDisabled = true;
     storiesNightModePlaying = true;
     storyShowTimeline = !parameters_getStoryDisableTimeline();
     storiesNightModeCurrentAudio[0] = '\0';
@@ -623,8 +631,37 @@ void stories_drawTimeline(bool forceDraw) {
     video_applyToVideo();
 }
 
+// True while the story plays by itself: the panel is then only lit to show the
+// current illustration or the timeline, and has to be switched off on its own
+// since autosleep is locked for the whole playback.
+bool stories_isPlayingAlone(void) {
+    return storyShowTimeline || storyAutoplay || storiesNightModePlaying;
+}
+
+void stories_startScreenWindow(int duration) {
+    if (duration < 0) {
+        duration = 0;
+    }
+    storyScreenEnableEndTime = get_time() + duration;
+    storyScreenAutoDisabled = false;
+}
+
+bool stories_canEnableScreen(void) {
+    if (storyScreenPowerLockedOff) {
+        return false;
+    }
+    if (!stories_isPlayingAlone()) {
+        return true;
+    }
+    if (storyScreenAutoDisabled || get_time() >= storyScreenEnableEndTime) {
+        storyScreenAutoDisabled = true;
+        return false;
+    }
+    return true;
+}
+
 void stories_screenUpdate(void) {
-    if (!display_enabled || !storyShowTimeline) {
+    if (!display_enabled || !stories_isPlayingAlone()) {
         return;
     }
 
@@ -632,20 +669,24 @@ void stories_screenUpdate(void) {
     if (cTime != storyScreenUpdateTime) {
         storyScreenUpdateTime = cTime;
         bool isBlackScreen = !applock_isLockRecentlyChanged() && !applock_isUnlocking() && !app_volume_isShowed() && !app_brightness_isShowed();
-        if (isBlackScreen && cTime > storyScreenEnableEndTime) {
-            video_screenBlack();
-            video_applyToVideo();
+        if (isBlackScreen && cTime >= storyScreenEnableEndTime) {
+            // No black frame pushed here on purpose: display_setScreen(false)
+            // already clears the framebuffer, and keeping the content lets
+            // display_restore() bring the illustration back on wake up.
+            storyScreenAutoDisabled = true;
             display_setScreen(false);
             return;
         }
     }
 
-    stories_drawTimeline(false);
+    if (storyShowTimeline) {
+        stories_drawTimeline(false);
+    }
 }
 
 void stories_showTimeline(void) {
-    if (storyShowTimeline) {
-        storyScreenEnableEndTime = get_time() + 5;
+    if (storyShowTimeline && !storyScreenPowerLockedOff) {
+        stories_startScreenWindow(STORIES_TRANSIENT_SCREEN_ON_S);
         display_setScreen(true);
         stories_drawTimeline(true);
     }
@@ -685,11 +726,26 @@ void stories_readStage(void) {
         stories_inventory_update(stageNode);
     }
 
+    // Timeline visibility is a short overlay, not an autonomous segment. Using
+    // it here would make a manual audio-only stage suppress the initial screen
+    // budget of the autoplay stage that follows.
+    bool wasAutonomousPlayback = storyAutoplay || storiesNightModePlaying;
     cJSON *controlJson = cJSON_GetObjectItem(stageNode, "control");
     storyAutoplay = cJSON_IsTrue(cJSON_GetObjectItem(controlJson, "autoplay"));
     storyOkAction = true;
     storyShowTimeline = false;
     callback_stories_audio_hook = NULL;
+
+    bool isAutonomousPlayback = storyAutoplay || storiesNightModePlaying;
+    if (!isAutonomousPlayback) {
+        storyScreenAutoDisabled = false;
+        storyScreenEnableEndTime = 0;
+    } else if (!wasAutonomousPlayback) {
+        // One budget per autonomous playback segment, not per stage. Re-arming
+        // on every short illustrated stage could otherwise keep the panel on
+        // for the entire story.
+        stories_startScreenWindow(parameters_getStoryScreenOnDuration());
+    }
 
     cJSON *audioJson = cJSON_GetObjectItem(stageNode, "audio");
     bool isAudioDefined = audioJson != NULL && cJSON_IsString(audioJson);
@@ -729,8 +785,10 @@ void stories_readStage(void) {
     }
 
     if (isImageDefined) {
-        display_setScreen(true);
         storyScreenEnabled = true;
+        if (stories_canEnableScreen()) {
+            display_setScreen(true);
+        }
         video_screenBlack();
         video_screenAddImage(story_image_path, cJSON_GetStringValue(imageJson), 0, 0, 640);
         if (hasInventory) {
@@ -745,7 +803,12 @@ void stories_readStage(void) {
         storyScreenEnabled = false;
         if (storiesNightModeEnabled && storyAutoplay && !storyOkAction) {
             sprintf(storiesNightModeCurrentAudio, "%s%s", story_audio_path, cJSON_GetStringValue(audioJson));
-            display_setScreen(true);
+            // This branch does draw something (night mode cover + playlist
+            // counter), so the panel must be redrawable after it went off.
+            storyScreenEnabled = true;
+            if (stories_canEnableScreen()) {
+                display_setScreen(true);
+            }
             video_screenBlack();
             video_screenAddImage(SYSTEM_RESOURCES, "storytellerNightMode.png", 0, 0, 640);
             stories_nightMode_screenDisplayCount();
@@ -978,6 +1041,9 @@ void stories_title(void) {
 
     stories_autosleep_unlock();
     storyAutoplay = false;
+    storyScreenAutoDisabled = false;
+    storyScreenPowerLockedOff = false;
+    storyScreenEnableEndTime = 0;
     storyTime = 0;
 
     char story_path[STR_MAX];
@@ -1109,12 +1175,54 @@ void stories_previous(void) {
 }
 
 void stories_forceRefreshScreen(void) {
-    if (applock_isLockRecentlyChanged() || applock_isUnlocking() || app_volume_isShowed() || app_brightness_isShowed()) {
+    bool showOverlay = applock_isLockRecentlyChanged() || applock_isUnlocking() ||
+                       app_volume_isShowed() || app_brightness_isShowed();
+    if (storyScreenPowerLockedOff) {
+        display_setScreen(false);
+    } else if (showOverlay) {
+        stories_startScreenWindow(STORIES_TRANSIENT_SCREEN_ON_S);
         display_setScreen(true);
-    } else {
+    } else if (display_enabled || !stories_isPlayingAlone()) {
         display_setScreen(storyScreenEnabled);
     }
     video_applyToVideo();
+}
+
+// A POWER-off is sticky across stage changes. Without this state, every new
+// illustration immediately undid the user's request and relit the panel.
+void stories_screenSleep(void) {
+    storyScreenPowerLockedOff = true;
+    display_setScreen(false);
+}
+
+// Light the panel back up on user request and redraw whatever the current
+// stage shows. Always switches the panel on so the POWER toggle can never be
+// a one way trip.
+void stories_screenWakeUp(void) {
+    storyScreenPowerLockedOff = false;
+    stories_startScreenWindow(parameters_getStoryScreenOnDuration());
+    if (!storyScreenEnabled && !storyShowTimeline) {
+        // There is no useful visual content on this stage. Keep the panel off;
+        // a later illustrated stage may still use the freshly started window.
+        return;
+    }
+    display_setScreen(true);
+    if (storyShowTimeline) {
+        stories_drawTimeline(true);
+    } else {
+        video_applyToVideo();
+    }
+}
+
+// True while an audio hook is armed: the end of the track chains to the next
+// stage, so the main loop has to notice it quickly.
+bool stories_isAudioChaining(void) {
+    return callback_stories_audio_hook != NULL && audio_isPlaying();
+}
+
+// True while stories_screenUpdate() has per-second work to do.
+bool stories_isScreenAnimated(void) {
+    return display_enabled && stories_isPlayingAlone();
 }
 
 void stories_menu(void) {
@@ -1232,6 +1340,8 @@ void stories_reset(void) {
     storyShowTimeline = false;
     storyScreenUpdateTime = 0;
     storyScreenEnableEndTime = 0;
+    storyScreenAutoDisabled = false;
+    storyScreenPowerLockedOff = false;
     storyLastPlayingTime = 0;
     storyPlayingTime = 0;
     if (hasInventory) {
@@ -1241,7 +1351,7 @@ void stories_reset(void) {
         storyInventoryCountLength = -1;
     }
     if (storyJson != NULL) {
-        cJSON_free(storyJson);
+        cJSON_Delete(storyJson);
         storyJson = NULL;
     }
     stories_title();

@@ -2,6 +2,7 @@
 .idea
 .vscode/
 *.o
+*.d
 /documents/
 /design/
 /src/**/*.log

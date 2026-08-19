@@ -63,10 +63,23 @@ main() {
 
     flash_telmi_logo
 
+    start_power_telemetry
     launch_storyteller
+    stop_power_telemetry
+    sync
 
+    # storyTeller has exited: in the nominal path it asked for a shutdown, so the
+    # first check powers the device off and never returns. If it died without
+    # asking, don't spin a core at 100% forever: power off after about 10s.
+    wait_off_order=0
     while true; do
         check_off_order "End"
+        wait_off_order=$((wait_off_order + 1))
+        if [ $wait_off_order -ge 10 ]; then
+            log "storyTeller exited without a shutdown order, forcing power off"
+            touch /tmp/.offOrder
+        fi
+        sleep 1
     done
 }
 
@@ -134,7 +147,26 @@ launch_storyteller() {
     cd $sysdir
     # LD_PRELOAD="$sysdir/lib/libpadsp.so" storyTeller 2>&1 | tee -a "$sysdir/logs/StoryTeller.log"
     LD_PRELOAD="$sysdir/lib/libpadsp.so" storyTeller
-    sync
+}
+
+start_power_telemetry() {
+    powerlog_pid=
+    if [ -f /mnt/SDCARD/Saves/.powerTelemetry ]; then
+        sh "$sysdir/script/powerlog.sh" &
+        powerlog_pid=$!
+    fi
+}
+
+stop_power_telemetry() {
+    if [ -n "$powerlog_pid" ]; then
+        if kill -0 "$powerlog_pid" 2> /dev/null; then
+            kill "$powerlog_pid"
+        fi
+        if ! wait "$powerlog_pid"; then
+            log "power telemetry could not be copied to the SD card; inspect /tmp/telmi-power.csv"
+        fi
+        powerlog_pid=
+    fi
 }
 
 check_off_order() {

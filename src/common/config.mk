@@ -31,7 +31,7 @@ CFILES := $(CFILES) $(foreach dir, $(SOURCES), $(wildcard $(dir)/*.c))
 CPPFILES := $(CPPFILES) $(foreach dir, $(SOURCES), $(wildcard $(dir)/*.cpp))
 OFILES = $(CFILES:.c=.o) $(CPPFILES:.cpp=.o)
 
-CFLAGS := -I../../include -I../common -DPLATFORM_$(shell echo $(PLATFORM) | tr a-z A-Z) -DONION_VERSION="\"$(VERSION)\"" -Wall
+CFLAGS := -I../../include -I../common -DPLATFORM_$(shell echo $(PLATFORM) | tr a-z A-Z) -DONION_VERSION="\"$(VERSION)\"" -Wall -MMD -MP
 
 ifeq ($(DEBUG),1)
 CFLAGS := $(CFLAGS) -DLOG_DEBUG -g3
@@ -41,8 +41,12 @@ ifeq ($(TEST),1)
 CFLAGS := $(CFLAGS) -I../include -I../src/common -I$(GTEST_INCLUDE_DIR)
 endif
 
-CXXFLAGS := $(CFLAGS)
 LDFLAGS := -L../../lib -L/usr/local/lib
+
+ifneq ($(DEBUG),1)
+CFLAGS := $(CFLAGS) -Os -ffunction-sections -fdata-sections
+LDFLAGS := $(LDFLAGS) -Wl,--gc-sections
+endif
 
 ifeq ($(PLATFORM),miyoomini)
 CFLAGS := $(CFLAGS) -marm -mtune=cortex-a7 -mfpu=neon-vfpv4 -mfloat-abi=hard -march=armv7ve -Wl,-rpath=$(LIB)
@@ -52,3 +56,5 @@ LDFLAGS := $(LDFLAGS) -lshmvar
 endif
 
 endif
+
+CXXFLAGS := $(CFLAGS)

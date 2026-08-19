@@ -36,8 +36,8 @@ int app_validAppIndex(int currentAppIndex, int direction) {
 }
 
 void app_refreshScreen(void) {
-    video_displayImage(SYSTEM_RESOURCES, appImages[appIndex]);
     display_setScreen(true);
+    video_displayImage(SYSTEM_RESOURCES, appImages[appIndex]);
     autosleep_unlock(parameters_getScreenOnInactivityTime(), parameters_getScreenOffInactivityTime());
 }
 
@@ -55,6 +55,66 @@ void app_update(void) {
                 break;
         }
     }
+}
+
+void app_screenWakeUp(void) {
+    if (appOpened) {
+        switch (appIndex) {
+            case APP_STORIES:
+            case APP_NIGHTMODE:
+                stories_screenWakeUp();
+                break;
+            case APP_MUSIC:
+                musicplayer_screenWakeUp();
+                break;
+            default:
+                break;
+        }
+    } else {
+        app_refreshScreen();
+    }
+}
+
+void app_screenSleep(void) {
+    if (appOpened && (appIndex == APP_STORIES || appIndex == APP_NIGHTMODE)) {
+        stories_screenSleep();
+    } else {
+        display_setScreen(false);
+    }
+}
+
+// True while the running app is chaining audio tracks: the main loop must poll
+// often enough to start the next one without an audible gap.
+bool app_isAudioChaining(void) {
+    if (appOpened) {
+        switch (appIndex) {
+            case APP_STORIES:
+            case APP_NIGHTMODE:
+                return stories_isAudioChaining();
+            case APP_MUSIC:
+                return musicplayer_isAudioChaining();
+            default:
+                break;
+        }
+    }
+    return false;
+}
+
+// True while the running app refreshes its screen every second (timeline,
+// player interface) or has a pending screen-off deadline.
+bool app_isScreenAnimated(void) {
+    if (appOpened) {
+        switch (appIndex) {
+            case APP_STORIES:
+            case APP_NIGHTMODE:
+                return stories_isScreenAnimated();
+            case APP_MUSIC:
+                return musicplayer_isScreenAnimated();
+            default:
+                break;
+        }
+    }
+    return false;
 }
 
 void app_forceRefreshScreen(void) {
@@ -252,6 +312,7 @@ void app_init(void) {
     } else {
         app_refreshScreen();
     }
+    cJSON_Delete(savedState);
 }
 
 #endif // STORYTELLER_APP_SELECTOR__

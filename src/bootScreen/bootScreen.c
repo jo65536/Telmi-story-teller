@@ -69,13 +69,14 @@ int main(int argc, char *argv[])
 
     if (show_version) {
         const char *version_str = file_read("/mnt/SDCARD/.tmp_update/telmiVersion/version.txt");
-        if (strlen(version_str) > 0) {
+        if (version_str != NULL && version_str[0] != '\0') {
             SDL_Surface *version = TTF_RenderUTF8_Blended(font, version_str, color);
             if (version) {
                 SDL_BlitSurface(version, NULL, screen, &(SDL_Rect){20, 450 - version->h / 2});
                 SDL_FreeSurface(version);
             }
         }
+        free((void *)version_str);
     }
 
     if (strlen(message_str) > 0) {
