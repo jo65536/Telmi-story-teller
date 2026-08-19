@@ -97,6 +97,11 @@ void parameters_init(void) {
         json_getInt(parameters, "screenOffInactivityTime", &app_parameters_screenOffInactivityTime);
         json_getInt(parameters, "musicInactivityTime", &app_parameters_musicInactivityTime);
         json_getInt(parameters, "storyScreenOnDuration", &app_parameters_storyScreenOnDuration);
+        if (app_parameters_storyScreenOnDuration <= 0) {
+            // A missing or mistyped value coerces to 0 and would blank every
+            // illustration from the first stage; fall back to the default.
+            app_parameters_storyScreenOnDuration = 30;
+        }
         if (!cJSON_IsNull(cJSON_GetObjectItem(parameters, "storyDisplayTiles"))) {
             json_getBool(parameters, "storyDisplayTiles", &app_parameters_storyDisplayTiles);
         }

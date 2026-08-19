@@ -14,9 +14,12 @@ chemins capables d'annuler le gain ou de consommer inutilement.
 1. Le délai écran était réarmé à chaque stage illustré. Une histoire composée de
    stages courts pouvait donc garder l'écran allumé indéfiniment. Un appui POWER
    manuel était également annulé par le stage suivant.
-2. `Mix_PlayMusic(music, 1)` joue une piste puis une répétition supplémentaire.
-   La valeur correcte pour une lecture unique est `0`, conformément à la
-   [documentation SDL_mixer](https://wiki.libsdl.org/SDL2_mixer/Mix_PlayMusic).
+2. `Mix_PlayMusic(music, 0)` est la valeur canonique pour une lecture unique.
+   Correction post-revue : avec la SDL2_mixer 2.8.0 embarquée, `loops=1` était
+   déjà coercé en une seule lecture complète (`Mix_FadeInMusicPos` force
+   `loops==0` à 1) — le passage à `0` clarifie l'intention mais ne change pas
+   le comportement, et aucun gain « absence de répétition » n'est à attendre
+   du test A/B sur ce point.
 3. Sur Mini Plus, `batmon` lançait le binaire vendeur `axp_test` chaque seconde,
    plus une seconde fois toutes les 15 secondes : environ 3 840 processus par
    heure.

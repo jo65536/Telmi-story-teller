@@ -120,12 +120,14 @@ void display_setScreen(bool enabled) {
         return;
     }
 
-    bool pwm_ok = true;
     if (!enabled) {
         display_save();
         // Stop the PWM clock as well as cutting the panel/backlight GPIO.
         // It is explicitly re-enabled on wake below.
-        pwm_ok = file_write(PWM_DIR "pwm0/enable", "0", 1);
+        if (!exists(PWM_DIR "pwm0/enable")) {
+            file_write(PWM_DIR "export", "0", 1);
+        }
+        file_write(PWM_DIR "pwm0/enable", "0", 1);
     } else {
         // Restore while the panel and backlight are still off to avoid exposing
         // the cleared framebuffer for a frame during wake-up.
@@ -148,10 +150,15 @@ void display_setScreen(bool enabled) {
             file_write(PWM_DIR "export", "0", 1);
         }
         file_write(PWM_DIR "pwm0/enable", "0", 1);
-        pwm_ok = file_write(PWM_DIR "pwm0/enable", "1", 1);
+        file_write(PWM_DIR "pwm0/enable", "1", 1);
     }
 
-    if (gpio_ok && pwm_ok) {
+    // The GPIO cuts the panel and the backlight, so it is the source of truth
+    // for the visible state. Tracking it (rather than GPIO && PWM) keeps
+    // display_enabled in sync with what the user sees: a failed PWM write can
+    // waste a little power, but can no longer strand the toggle on a dark
+    // panel that the state machine believes is lit.
+    if (gpio_ok) {
         display_enabled = enabled;
         display_writeState();
     }
