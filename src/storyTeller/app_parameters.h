@@ -12,6 +12,7 @@ static double app_parameters_systemScreenBrightnessMax = 10.0;
 static int app_parameters_screenOnInactivityTime = 120;
 static int app_parameters_screenOffInactivityTime = 300;
 static int app_parameters_musicInactivityTime = 3600;
+static int app_parameters_storyScreenOnDuration = 30;
 static bool app_parameters_storyDisplayTiles = false;
 static bool app_parameters_storyDisableNightMode = false;
 static bool app_parameters_storyDisableTimeline = false;
@@ -63,6 +64,12 @@ int parameters_getMusicInactivityTime() {
     return app_parameters_musicInactivityTime;
 }
 
+// Seconds the panel stays lit during an autonomous playback segment. Stage
+// changes do not restart this budget; a user wake-up does.
+int parameters_getStoryScreenOnDuration() {
+    return app_parameters_storyScreenOnDuration;
+}
+
 bool parameters_getStoryDisplayNine() {
     return app_parameters_storyDisplayTiles;
 }
@@ -89,6 +96,7 @@ void parameters_init(void) {
         json_getInt(parameters, "screenOnInactivityTime", &app_parameters_screenOnInactivityTime);
         json_getInt(parameters, "screenOffInactivityTime", &app_parameters_screenOffInactivityTime);
         json_getInt(parameters, "musicInactivityTime", &app_parameters_musicInactivityTime);
+        json_getInt(parameters, "storyScreenOnDuration", &app_parameters_storyScreenOnDuration);
         if (!cJSON_IsNull(cJSON_GetObjectItem(parameters, "storyDisplayTiles"))) {
             json_getBool(parameters, "storyDisplayTiles", &app_parameters_storyDisplayTiles);
         }
@@ -101,6 +109,7 @@ void parameters_init(void) {
         if (!cJSON_IsNull(cJSON_GetObjectItem(parameters, "musicDisableRepeatModes"))) {
             json_getBool(parameters, "musicDisableRepeatModes", &app_parameters_musicDisableRepeatModes);
         }
+        cJSON_Delete(parameters);
     }
 }
 

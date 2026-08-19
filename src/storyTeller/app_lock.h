@@ -24,6 +24,12 @@ bool applock_isUnlocking(void) {
     return app_lock_Timer > 0 && app_lock_IsLocked;
 }
 
+// True while a lock timer is counting down, i.e. while applock_checkLock()
+// still has a deadline to honour and the main loop must not sleep too long.
+bool applock_isTimerRunning(void) {
+    return app_lock_Timer > 0 || app_lock_ChangedTimer > 0;
+}
+
 bool applock_startTimer(void) {
     app_lock_Timer = get_time();
     return app_lock_IsLocked;

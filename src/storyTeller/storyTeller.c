@@ -24,10 +24,19 @@
 #define PRESSED 1
 #define REPEAT 2
 
+// How long the main loop is allowed to block in poll() waiting for a key, in
+// milliseconds. A key press always wakes it up immediately, so these values
+// only bound the latency of the timers the loop drives by itself.
+#define POLL_TIMEOUT_AUDIO 50   // chaining to the next track, must be inaudible
+#define POLL_TIMEOUT_TIMER 100  // a button is being held down
+#define POLL_TIMEOUT_SCREEN 250 // an on-screen counter refreshes every second
+#define POLL_TIMEOUT_IDLE 1000  // nothing but second-grained timers left
+#define POWER_LONG_PRESS_MS 2000
+
 // Global Variables
 static int input_fd;
 static struct input_event ev;
-static struct pollfd fds[1];
+static struct pollfd fds[2];
 
 bool keyinput_isValid(void) {
     read(input_fd, &ev, sizeof(ev));
@@ -39,10 +48,31 @@ bool keyinput_isValid(void) {
     return true;
 }
 
+//
+//    Longest the loop may sleep before it has work to do again.
+//    Ordered from the tightest deadline to the loosest, so the first match is
+//    the smallest applicable timeout.
+//
+int keyinput_pollTimeout(bool isPowerPressed) {
+    // The SDL_mixer finished hook normally wakes poll through a self-pipe.
+    // Keep the 50 ms path only as a compatibility fallback if pipe setup failed.
+    if (!audio_notifications_available() && app_isAudioChaining()) {
+        return POLL_TIMEOUT_AUDIO;
+    }
+    if (isPowerPressed || applock_isTimerRunning()) {
+        return POLL_TIMEOUT_TIMER;
+    }
+    if (app_isScreenAnimated() || app_volume_isShowed() || app_brightness_isShowed()) {
+        return POLL_TIMEOUT_SCREEN;
+    }
+    return POLL_TIMEOUT_IDLE;
+}
+
 int main(int argc, char *argv[]) {
     srand(time(NULL));
     display_init();
     video_audio_init();
+    audio_notifications_init();
     settings_init();
     parameters_init();
     settings_setVolume(parameters_getAudioVolumeStartup(), true);
@@ -55,14 +85,17 @@ int main(int argc, char *argv[]) {
     memset(&fds, 0, sizeof(fds));
     fds[0].fd = input_fd;
     fds[0].events = POLLIN;
+    fds[1].fd = audio_notifications_fd();
+    fds[1].events = POLLIN;
 
     bool isMenuPressed = false;
     bool menuPreventDefault = false;
     bool startPowerPressed = false;
-    long startPowerPressedTime = 0;
+    Uint32 startPowerPressedTime = 0;
 
     while (1) {
-        if (autosleep_isSleepingTime() || (startPowerPressed && (get_time() - startPowerPressedTime) > 1)) {
+        if (autosleep_isSleepingTime() ||
+            (startPowerPressed && SDL_GetTicks() - startPowerPressedTime >= POWER_LONG_PRESS_MS)) {
             goto exit_loop;
         }
 
@@ -71,7 +104,16 @@ int main(int argc, char *argv[]) {
         forceRefreshScreen = app_brightness_checkDisplay() || forceRefreshScreen;
         app_update();
 
-        if (poll(fds, 1, 0) > 0) {
+        // A pending refresh is applied at the end of this iteration, so never
+        // sleep on it: that would delay what is already on screen by a tick.
+        int pollTimeout = forceRefreshScreen ? 0 : keyinput_pollTimeout(startPowerPressed);
+
+        int pollResult = poll(fds, 2, pollTimeout);
+        if (pollResult > 0 && (fds[1].revents & POLLIN)) {
+            audio_notifications_drain();
+        }
+
+        if (pollResult > 0 && (fds[0].revents & POLLIN)) {
             if (!keyinput_isValid()) {
                 continue;
             }
@@ -88,7 +130,7 @@ int main(int argc, char *argv[]) {
                             break;
                         case HW_BTN_POWER :
                             if (!applock_isLocked()) {
-                                startPowerPressedTime = get_time();
+                                startPowerPressedTime = SDL_GetTicks();
                                 startPowerPressed = true;
                             }
                             break;
@@ -105,6 +147,22 @@ int main(int argc, char *argv[]) {
                     autosleep_keepAwake();
                     switch (ev.code) {
                         case HW_BTN_POWER :
+                            // Short press: toggle the panel without leaving playback.
+                            // Re-check the duration here in case RELEASE woke poll
+                            // exactly as the long-press deadline elapsed.
+                            if (startPowerPressed) {
+                                if (SDL_GetTicks() - startPowerPressedTime >= POWER_LONG_PRESS_MS) {
+                                    goto exit_loop;
+                                }
+                                if (display_enabled) {
+                                    app_screenSleep();
+                                } else {
+                                    app_screenWakeUp();
+                                }
+                                // The panel state drives which inactivity delay
+                                // applies, so recompute it once it has changed.
+                                autosleep_keepAwake();
+                            }
                             startPowerPressed = false;
                             break;
                         case HW_BTN_MENU :

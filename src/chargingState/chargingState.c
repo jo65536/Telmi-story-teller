@@ -6,6 +6,7 @@
 #include <linux/input.h>
 #include <poll.h>
 #include <pthread.h>
+#include <signal.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -33,7 +34,7 @@
 
 #define DISPLAY_TIMEOUT 10000
 
-static bool quit = false;
+static volatile sig_atomic_t quit = 0;
 static bool suspended = false;
 static int input_fd;
 static struct input_event ev;
@@ -79,6 +80,7 @@ int main(void) {
     bool turn_off = false;
 
     getDeviceModel();
+    display_init();
     display_getResolution();
 
     SDL_Init(SDL_INIT_VIDEO);
@@ -137,6 +139,8 @@ int main(void) {
 
     uint32_t acc_ticks = 0, last_ticks = SDL_GetTicks(),
             display_timer = last_ticks;
+    uint32_t charging_check_timer = last_ticks;
+    bool is_charging = true;
 
     while (!quit) {
         while (poll(fds, 1, suspended ? 1000 - min_delay : 0)) {
@@ -168,7 +172,12 @@ int main(void) {
             display_timer = SDL_GetTicks();
         }
 
-        if (!battery_isCharging()) {
+        uint32_t now = SDL_GetTicks();
+        if (now - charging_check_timer >= 1000) {
+            is_charging = battery_isCharging();
+            charging_check_timer = now;
+        }
+        if (!is_charging) {
             quit = true;
             turn_off = true;
             break;
@@ -241,6 +250,7 @@ int main(void) {
 
     // restore CPU performance mode
     system_powersave_off();
+    display_free();
 
     return EXIT_SUCCESS;
 }

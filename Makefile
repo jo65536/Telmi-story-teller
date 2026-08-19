@@ -44,7 +44,7 @@ include ./src/common/commands.mk
 
 ###########################################################
 
-.PHONY: all version core apps external release clean deepclean git-clean with-toolchain patch lib test
+.PHONY: all version core apps external release clean deepclean git-clean with-toolchain patch lib test test-powerlog
 
 all: dist
 
@@ -105,7 +105,7 @@ clean:
 	@$(ECHO) $(PRINT_RECIPE)
 	@rm -rf $(BUILD_DIR) $(BUILD_TEST_DIR) $(ROOT_DIR)/dist
 	@rm -f $(CACHE)/.setup
-	@find include src -type f -name *.o -exec rm -f {} \;
+	@find include src -type f \( -name '*.o' -o -name '*.d' \) -exec rm -f {} \;
 
 deepclean: clean
 	@rm -rf $(CACHE)
@@ -140,6 +140,9 @@ test:
 	@mkdir -p $(BUILD_TEST_DIR)/infoPanel_test_data && cd $(TEST_SRC_DIR) && BUILD_DIR=$(BUILD_TEST_DIR)/ make dev
 	@cp -R $(TEST_SRC_DIR)/infoPanel_test_data $(BUILD_TEST_DIR)/
 	cd $(BUILD_TEST_DIR) && ./test
+
+test-powerlog:
+	@busybox sh $(TEST_SRC_DIR)/test_powerlog.sh
 
 static-analysis:
 	@cd $(ROOT_DIR) && cppcheck -I $(INCLUDE_DIR) --enable=all $(SRC_DIR)

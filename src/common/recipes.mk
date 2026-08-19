@@ -7,6 +7,8 @@ $(TARGET): $(OFILES)
 
 build: $(TARGET)
 
+-include $(OFILES:.o=.d)
+
 %.o: %.c
 	@$(ECHO) $(PRINT_BUILD)
 	@$(ECHO) $(COMPILE_CC_OUT)
@@ -17,7 +19,7 @@ build: $(TARGET)
 
 clean:
 	@$(ECHO) $(PRINT_RECIPE)
-	@rm -f $(TARGET) $(OFILES)
+	@rm -f $(TARGET) $(OFILES) $(OFILES:.o=.d)
 
 install:
 	@echo "do nothing for install"

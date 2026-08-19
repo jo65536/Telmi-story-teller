@@ -78,8 +78,10 @@ void file_readLastLine(const char *filename, char *out_str)
         fseek(fd, 0L, SEEK_SET);
 
         int max_len = size < 255 ? size + 1 : 255;
-        if (max_len <= 1)
+        if (max_len <= 1) {
+            fclose(fd);
             return;
+        }
 
         // get the last line
         fseek(fd, -max_len, SEEK_END);
@@ -100,36 +102,61 @@ void file_readLastLine(const char *filename, char *out_str)
 
 const char *file_read(const char *path)
 {
-    FILE *f = NULL;
-    char *buffer = NULL;
-    long length = 0;
-
-    if (!exists(path))
+    FILE *f = fopen(path, "rb");
+    if (f == NULL)
         return NULL;
 
-    if ((f = fopen(path, "rb"))) {
-        fseek(f, 0, SEEK_END);
-        length = ftell(f);
-        fseek(f, 0, SEEK_SET);
-        buffer = (char *)malloc((length + 1) * sizeof(char));
-        if (buffer)
-            fread(buffer, sizeof(char), length, f);
+    if (fseek(f, 0, SEEK_END) != 0) {
         fclose(f);
+        return NULL;
     }
-    buffer[length] = '\0';
 
+    long length = ftell(f);
+    if (length < 0 || fseek(f, 0, SEEK_SET) != 0) {
+        fclose(f);
+        return NULL;
+    }
+
+    char *buffer = malloc((size_t)length + 1);
+    if (buffer == NULL) {
+        fclose(f);
+        return NULL;
+    }
+
+    size_t bytes_read = fread(buffer, 1, (size_t)length, f);
+    if (ferror(f)) {
+        free(buffer);
+        fclose(f);
+        return NULL;
+    }
+    fclose(f);
+    buffer[bytes_read] = '\0';
     return buffer;
 }
 
 bool file_write(const char *path, const char *str, uint32_t len)
 {
-    uint32_t fd;
-    if ((fd = open(path, O_WRONLY)) == 0)
+    int fd = open(path, O_WRONLY);
+    if (fd < 0)
         return false;
-    if (write(fd, str, len) == -1)
-        return false;
-    close(fd);
-    return true;
+
+    uint32_t total_written = 0;
+    while (total_written < len) {
+        ssize_t written = write(fd, str + total_written, len - total_written);
+        if (written < 0) {
+            if (errno == EINTR)
+                continue;
+            close(fd);
+            return false;
+        }
+        if (written == 0) {
+            close(fd);
+            return false;
+        }
+        total_written += (uint32_t)written;
+    }
+
+    return close(fd) == 0;
 }
 
 void file_copy(const char *src_path, const char *dest_path)

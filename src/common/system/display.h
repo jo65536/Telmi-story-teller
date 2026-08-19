@@ -26,6 +26,14 @@ static uint32_t stride, bpp;
 static uint8_t *savebuf;
 static bool display_enabled = true;
 
+static void display_writeState(void) {
+    FILE *state = fopen("/tmp/telmi-display-state", "w");
+    if (state != NULL) {
+        fputc(display_enabled ? '1' : '0', state);
+        fclose(state);
+    }
+}
+
 void display_init(void) {
     // Open and mmap FB
     fb_fd = open("/dev/fb0", O_RDWR);
@@ -36,6 +44,7 @@ void display_init(void) {
     ioctl(fb_fd, FBIOGET_VSCREENINFO, &vinfo);
     DISPLAY_WIDTH = vinfo.xres;
     DISPLAY_HEIGHT = vinfo.yres;
+    display_writeState();
 }
 
 //
@@ -54,6 +63,12 @@ void display_getResolution(void) {
 //    Save/Clear Display area
 //
 void display_save(void) {
+    // Already saved: the framebuffer has been cleared since, saving it again
+    // would leak the previous buffer and overwrite the content to restore.
+    if (savebuf) {
+        return;
+    }
+
     stride = finfo.line_length;
     ioctl(fb_fd, FBIOGET_VSCREENINFO, &vinfo);
     bpp = vinfo.bits_per_pixel / 8; // byte per pixel
@@ -99,27 +114,47 @@ void display_reset(void) {
 //    Screen On/Off
 //
 void display_setScreen(bool enabled) {
+    // Avoid repeated sysfs operations and framebuffer copies when callers ask
+    // for the state that is already active.
+    if (display_enabled == enabled) {
+        return;
+    }
+
+    bool pwm_ok = true;
+    if (!enabled) {
+        display_save();
+        // Stop the PWM clock as well as cutting the panel/backlight GPIO.
+        // It is explicitly re-enabled on wake below.
+        pwm_ok = file_write(PWM_DIR "pwm0/enable", "0", 1);
+    } else {
+        // Restore while the panel and backlight are still off to avoid exposing
+        // the cleared framebuffer for a frame during wake-up.
+        display_restore();
+    }
+
     // export gpio4, direction: out
     file_write(GPIO_DIR1 "export", "4", 1);
     file_write(GPIO_DIR2 "gpio4/direction", "out", 3);
 
     // screen on/off
-    file_write(GPIO_DIR2 "gpio4/value", enabled ? "1" : "0", 1);
+    bool gpio_ok = file_write(GPIO_DIR2 "gpio4/value", enabled ? "1" : "0", 1);
 
     // unexport gpio4
     file_write(GPIO_DIR1 "unexport", "4", 1);
 
     if (enabled) {
         // re-enable brightness control
-        file_write(PWM_DIR "export", "0", 1);
+        if (!exists(PWM_DIR "pwm0/enable")) {
+            file_write(PWM_DIR "export", "0", 1);
+        }
         file_write(PWM_DIR "pwm0/enable", "0", 1);
-        file_write(PWM_DIR "pwm0/enable", "1", 1);
-        display_restore();
-    } else {
-        display_save();
+        pwm_ok = file_write(PWM_DIR "pwm0/enable", "1", 1);
     }
 
-    display_enabled = enabled;
+    if (gpio_ok && pwm_ok) {
+        display_enabled = enabled;
+        display_writeState();
+    }
 }
 
 void display_toggle(void) { display_setScreen(!display_enabled); }
