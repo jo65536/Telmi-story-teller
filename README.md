@@ -1,3 +1,10 @@
+> **⚠️ Unofficial fork — not an official Telmi release.**
+> This is a personal, experimental fork of [DantSu/Telmi-story-teller](https://github.com/DantSu/Telmi-story-teller)
+> carrying battery-life optimizations. It is **not affiliated with, endorsed by, or supported by** the Telmi
+> project or its maintainers, and is provided as-is for testing only. Do not report issues from this build to
+> the upstream project. For the official firmware, releases and support, use
+> [the upstream project](https://github.com/DantSu/Telmi-story-teller) and [telmi.fr](https://telmi.fr).
+
 ![Total Download](https://img.shields.io/github/downloads/DantSu/Telmi-story-teller/total.svg) [![v1.10.1 download](https://img.shields.io/github/downloads/DantSu/Telmi-story-teller/1.10.1/total.svg)](https://github.com/DantSu/Telmi-story-teller/releases/tag/1.10.1)
 
 <p align="center"><img src="https://dantsu.com/files/Telmi_1280.png" alt="Telmi OS splash screen" /></p>

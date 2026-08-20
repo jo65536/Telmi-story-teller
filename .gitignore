@@ -10,6 +10,7 @@
 /build_test/
 /release/
 /dist/
+/diags/
 temp/
 cache/
 /.build_cached
