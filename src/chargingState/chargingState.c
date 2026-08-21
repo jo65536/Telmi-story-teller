@@ -284,15 +284,15 @@ int main(void) {
         uint32_t ticks = SDL_GetTicks();
 
         if (!suspended) {
+            // Suspend instead of powering off (previously the Mini Plus shut
+            // down here): a short power press then brings the battery level
+            // back instantly, and the session keeps measuring the charge
+            // slope. Unplugging while suspended still powers off through the
+            // charging check above — including, on a broken sensor, via the
+            // 30 s fail-safe.
             if (ticks - display_timer >= DISPLAY_TIMEOUT) {
-                if (DEVICE_ID == MIYOO354) {
-                    quit = true;
-                    turn_off = true;
-                    break;
-                } else {
-                    suspend(true);
-                    continue;
-                }
+                suspend(true);
+                continue;
             }
 
             acc_ticks += ticks - last_ticks;
